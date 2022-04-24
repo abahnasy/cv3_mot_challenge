@@ -1,45 +1,92 @@
-import os
+import os, sys
+import argparse
+import random
 import time
-
+import logging
 
 from comet_ml import Experiment
-import matplotlib.pyplot as plt
-from tqdm.auto import tqdm
+from dotenv import load_dotenv
+from yacs.config import CfgNode
+from tqdm import tqdm
 import numpy as np
 import torch
-from torch.utils.data import (
-    Dataset,
-    DataLoader
-)
-import dotenv
+from torch.utils.data import DataLoader
 
-# load env variables and secret keys
-from dotenv import load_dotenv
+from src.config import get_cfg
+from src.tracker import build_tracker
+from src.metrics.utils import (
+    get_mot_accum,
+    evaluate_mot_accums,
+)
+from src.utils.timer import generate_time_stmp
+from src.data import MOT16Sequences
+from src.utils.logger import (
+    setup_loggers,
+    get_logger
+)
+from src.utils.viz import plot_sequence
+
 load_dotenv()
 
-from tracker.track_data import MOT16Sequences
-from tracker.object_detector import FRCNN_FPN
-from tracker.utils import (
-    evaluate_obj_detect,
-    obj_detect_transforms
-)
-from tracker.data_object_detector import MOT16ObjDetect
-from metrics.utils import (
-    evaluate_mot_accums,
-    get_mot_accum
-)
+try:
+    SLURM_JOB_ID = os.environ["SLURM_JOB_ID"]
+except:
+    SLURM_JOB_ID = "INTERACTIVE"
 
-device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+DATA_DIR = os.environ["DATA_DIR"]
 
 
-def best_deterministic_effort(seed = 12345):
+def seed_torch(seed=0):
+    #random.seed(seed)
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    random.seed(seed)
+    np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
-    np.random.seed(seed)
     torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+def setup(opts):
+    cfg = get_cfg()
+    exp_time_stamp = generate_time_stmp()
+    cfg.EXPERIMENT.UID = "{}_slurm_{}".format(exp_time_stamp, SLURM_JOB_ID)
+    cfg.OUTPUT_DIR = "./outputs/{}".format(cfg.EXPERIMENT.UID)
+    os.environ['CUDA_VISIBLE_DEVICES'] = opts.gpu_id # not ready for multi-gpu training
+    cfg.freeze()
+    # configuration snapshot
+    os.makedirs(cfg.OUTPUT_DIR)
+    path = os.path.join(cfg.OUTPUT_DIR, "config.yaml")
+    if isinstance(cfg, CfgNode):
+        with open(path, 'w') as f:
+            f.write(cfg.dump())
+    experiment = None
+    if opts.enable_vis:
+        experiment = Experiment(
+            workspace = cfg.EXPERIMENT.WORKSPACE, 
+            project_name=cfg.EXPERIMENT.PROJECT
+        )
+        experiment.set_name(cfg.EXPERIMENT.UID)
+        experiment.log_parameters(cfg)
+    return cfg, experiment
 
 
-def run_tracker(tracker, sequences, output_dir):
+
+def main():
+    
+    opts = get_argparser().parse_args()
+    seed_torch(opts.seed)
+    cfg, experiment = setup(opts)
+    setup_loggers(cfg)
+    logger = get_logger()
+    
+
+    # prepare data
+    sequences = MOT16Sequences(cfg.DATASETS.TRAIN.SEQ_NAME, DATA_DIR)
+    tracker = build_tracker(cfg)
+
+    # run tracker
     time_total = 0
     mot_accums = []
     results_seq = {}
@@ -47,121 +94,44 @@ def run_tracker(tracker, sequences, output_dir):
         tracker.reset()
         now = time.time()
 
-        print(f"Tracking: {seq}")
+        logger.info(f"Tracking: {seq}")
+
         data_loader = DataLoader(seq, batch_size=1, shuffle=False)
+
         for frame in tqdm(data_loader):
             tracker.step(frame)
         results = tracker.get_results()
         results_seq[str(seq)] = results
+
         if seq.no_gt:
-            print(f"No GT evaluation data available.")
+            logger.info(f"No GT evaluation data available.")
         else:
             mot_accums.append(get_mot_accum(results, seq))
 
         time_total += time.time() - now
 
-        print(f"Tracks found: {len(results)}")
-        print(f"Runtime for {seq}: {time.time() - now:.1f} s.")
+        logger.info(f"Tracks found: {len(results)}")
+        logger.info(f"Runtime for {seq}: {time.time() - now:.1f} s.")
 
-        seq.write_results(results, os.path.join(output_dir))
+        seq.write_results(results, os.path.join(cfg.OUTPUT_DIR))
+        plot_sequence(results, seq, first_n_frames=10, output_dir = "{}/{}".format(cfg.OUTPUT_DIR, str(seq)))
 
-    print(f"Runtime for all sequences: {time_total:.1f} s.")
+    logger.info(f"Runtime for all sequences: {time_total:.1f} s.")
     if mot_accums:
         evaluate_mot_accums(mot_accums,
                             [str(s) for s in sequences if not s.no_gt],
                             generate_overall=True)
 
+def get_argparser():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--gpu_id", type=str, default='0',
+                    help="GPU ID")
+    parser.add_argument("--seed", type=int, default=12345,
+                    help="consistent seed for repreduciblity")
+    parser.add_argument("--test_only", action='store_true', default=False)
+    parser.add_argument("--enable_vis", action='store_true', default=False,
+                        help="use CometML for visualization")
+    return parser
 
 if __name__ == "__main__":
-
-    best_deterministic_effort()
-    
-    experiment = Experiment(project_name="mot_challenge")
-    experiment.set_name("Data Visualizations")
-    DATA_DIR = "/lustre/groups/imm01/datasets/ahmed.bahnasy/mot_challenge/cv3dst_exercise/data"
-    MODEL_ZOO = "/lustre/groups/imm01/datasets/ahmed.bahnasy/mot_challenge/cv3dst_exercise/models"
-    OUTPUT_DIR = "/lustre/groups/imm01/datasets/ahmed.bahnasy/mot_challenge/cv3dst_exercise/output" # fix, separte output folders according to timestamp generated folders
-
-    # explore data
-    # seq_name = 'MOT16-02'
-    # data_dir = os.path.join(DATA_DIR, 'MOT16')
-    # sequences = MOT16Sequences(seq_name, data_dir, load_seg=True)
-
-    # for seq in sequences:
-    #     for i, frame in enumerate(seq):
-    #         img = frame['img']
-            
-    #         dpi = 96
-    #         fig, ax = plt.subplots(1, dpi=dpi)
-
-    #         img = img.mul(255).permute(1, 2, 0).byte().numpy()
-    #         width, height, _ = img.shape
-            
-    #         ax.imshow(img, cmap='gray')
-    #         fig.set_size_inches(width / dpi, height / dpi)
-
-    #         if 'gt' in frame:
-    #             gt = frame['gt']
-    #             for gt_id, box in gt.items():
-    #                 rect = plt.Rectangle(
-    #                 (box[0], box[1]),
-    #                 box[2] - box[0],
-    #                 box[3] - box[1],
-    #                 fill=False,
-    #                 linewidth=1.0)
-    #                 ax.add_patch(rect)
-
-    #         plt.axis('off')
-    #         # plt.show()
-    #         experiment.log_figure(figure_name="GT Boxes", figure=fig, overwrite=False, step=None)
-
-    #         if 'seg_img' in frame:
-    #             seg_img = frame['seg_img']
-    #             fig, ax = plt.subplots(1, dpi=dpi)
-    #             fig.set_size_inches(width / dpi, height / dpi)
-    #             ax.imshow(seg_img, cmap='gray')
-    #             plt.axis('off')
-    #             #plt.show()
-    #             experiment.log_figure(figure_name="Seg_imgs", figure=fig, overwrite=False, step=None)
-    #         break
-
-    # Detector settings        
-    obj_detect_model_file = os.path.join(MODEL_ZOO, 'faster_rcnn_fpn.model')
-    obj_detect_nms_thresh = 0.3
-
-    # object detector
-    obj_detect = FRCNN_FPN(num_classes=2, nms_thresh=obj_detect_nms_thresh)
-    obj_detect_state_dict = torch.load(obj_detect_model_file,
-                                    map_location=lambda storage, loc: storage)
-    obj_detect.load_state_dict(obj_detect_state_dict)
-    obj_detect.eval()
-    obj_detect.to(device)
-
-
-    # dataset_test = MOT16ObjDetect(os.path.join(DATA_DIR, 'MOT16/train'),
-                            #   obj_detect_transforms(train=False))
-    
-    # evalutate the detection model on the current dataset
-    # def collate_fn(batch):
-    #     return tuple(zip(*batch))
-    # data_loader_test = DataLoader(
-    #     dataset_test, batch_size=1, shuffle=False, num_workers=4,
-    #     collate_fn=collate_fn)
-    # evaluate_obj_detect(obj_detect, data_loader_test)
-
-    # ======================================================== #
-    # =============Test Naiive Tracker with IoU=============== #
-    # ======================================================== #
-
-    from tracker.tracker import TrackerIoUAssignment
-
-    tracker = TrackerIoUAssignment(obj_detect)
-
-    seq_name = 'MOT16-02'
-    data_dir = os.path.join(DATA_DIR, 'MOT16')
-    sequences = MOT16Sequences(seq_name, data_dir)
-    run_tracker(tracker, sequences, OUTPUT_DIR)
-
-    
-
-    
+    main()
