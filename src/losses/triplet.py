@@ -44,7 +44,9 @@ class HardBatchMiningTripletLoss(torch.nn.Module):
 
         # Compute ranking hinge loss
         y = torch.ones_like(dist_an)
-        return self.ranking_loss(dist_an, dist_ap, y)
+        # If y = 1 then it assumed the first input should be ranked higher (have a larger value) 
+        # than the second input, and vice-versa for y = -1
+        return self.ranking_loss(dist_an, dist_ap, y) # relative distances, not the actual values of the embeddings
 
 
 

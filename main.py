@@ -36,6 +36,7 @@ except:
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 DATA_DIR = os.environ["DATA_DIR"]
+DATA_DIR = os.path.join(DATA_DIR, 'MOT16')
 
 
 def seed_torch(seed=0):

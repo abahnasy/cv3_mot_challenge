@@ -194,8 +194,8 @@ class HungarianIoUTracker(Tracker):
 
 
             # TODO: Add new tracks.
-            new_boxes = []  
-            new_scores = [] 
+            new_boxes = []  # <-- needs to be filled.
+            new_scores = [] # <-- needs to be filled.
 
             for i, dist in enumerate(np.transpose(distance)):
                 if np.all(dist == _UNMATCHED_COST):
@@ -261,7 +261,10 @@ class HungarianIoUTrackerB(Tracker):
             self.add(boxes, scores)
 
 
-class ReIDTracker(Tracker):
+
+
+
+class ReIDTrackerGNN(Tracker):
 	def add(self, new_boxes, new_scores, new_features):
 		"""Initializes new Track objects and saves them."""
 		num_new = len(new_boxes)
@@ -321,7 +324,7 @@ class ReIDTracker(Tracker):
 		return distance
 
         
-class ReIDHungarianTracker(ReIDTracker):
+class ReIDHungarianTrackerGNN(ReIDTracker):
     def data_association(self, boxes, scores, pred_features):  
         """Refactored from previous implementation to split it onto distance computation and track management"""
         if self.tracks:

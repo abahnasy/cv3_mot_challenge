@@ -25,7 +25,7 @@ _C.MODEL.DETECTOR.NMS_THRESH = 0.3
 _C.MODEL.DETECTOR.NUM_CLASSES = 2
 
 _C.MODEL.TRACKER = CN()
-_C.MODEL.TRACKER.NAME = "TrackerIoUAssignment"
+_C.MODEL.TRACKER.NAME = "HungarianIoUTrackerB" #"TrackerIoUAssignment"
 
 # Optimizer
 _C.OPTIMIZER = CN()

@@ -2,6 +2,8 @@ from src.modeling.detector import build_detector
 
 from .tracker import (
     TrackerIoUAssignment,
+    HungarianIoUTracker,
+    HungarianIoUTrackerB,
 )
 def build_tracker(cfg):
     # build Detector
@@ -11,8 +13,12 @@ def build_tracker(cfg):
     # build Tracking head
     if cfg.MODEL.TRACKER.NAME == "TrackerIoUAssignment":
         tracker_fn = TrackerIoUAssignment
+    elif cfg.MODEL.TRACKER.NAME == "HungarianIoUTracker":
+        tracker_fn = HungarianIoUTracker
+    elif cfg.MODEL.TRACKER.NAME == "HungarianIoUTrackerB":
+        tracker_fn = HungarianIoUTrackerB
     else:
-        return ValueError("Undefined Tracking head !")
+        raise ValueError("Undefined Tracking head !")
     
     return tracker_fn(
         obj_detect
